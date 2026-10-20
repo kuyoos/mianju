@@ -22,59 +22,46 @@ jobs:
             yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VER" >/dev/null 2>&1
           fi
           export ANDROID_NDK_HOME="$SDK/ndk/$NDK_VER"
-
-          echo "NDK dir contents:"
-          ls "$ANDROID_NDK_HOME" || { echo "::error::NDK not found at $ANDROID_NDK_HOME"; exit 1; }
-
-          echo "toolchain file:"
-          ls "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" || { echo "::error::toolchain missing"; exit 1; }
-
           cmake -B build \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-30 \
             -DCMAKE_BUILD_TYPE=Release > cfg.log 2>&1 || true
-          echo "--- configure output ---"
           cat cfg.log
-          if [ ! -f build/Makefile ] && [ ! -f build/build.ninja ]; then
-            echo "::error::cmake configure failed"
-            tail -30 cfg.log | while IFS= read -r l; do echo "::error::$l"; done
-            exit 1
-          fi
-
           cmake --build build -j4 > bld.log 2>&1 || true
-          echo "--- build output ---"
-          cat bld.log
+          tail -20 bld.log
           if [ ! -f build/libzygisk.so ]; then
-            echo "::error::libzygisk.so not produced"
-            tail -30 bld.log | while IFS= read -r l; do echo "::error::$l"; done
-            exit 1
+            echo "::error::build failed"; tail -30 bld.log; exit 1
           fi
           ls -la build/libzygisk.so
 
       - name: Package
         run: |
-          mkdir -p pkg/lib64
+          set -e
+          mkdir -p pkg/lib64 pkg/lib
           cp magisk/module.prop magisk/post-fs-data.sh magisk/service.sh pkg/
           cp build/libzygisk.so pkg/lib64/libzygisk.so
+          if [ -f prebuilt/libgadget.so ]; then
+            cp prebuilt/libgadget.so pkg/lib64/libgadget.so
+            echo "gadget included: $(stat -c %s pkg/lib64/libgadget.so) bytes"
+          else
+            echo "::warning::prebuilt/libgadget.so missing"
+          fi
           python3 -c "
           import os, zipfile
           with zipfile.ZipFile('dfzygisk.zip','w',zipfile.ZIP_DEFLATED) as z:
               for root,d,files in os.walk('pkg'):
                   for f in files:
                       p=os.path.join(root,f)
-                      z.write(p, os.path.relpath(p,'pkg'))
-                      print('add', os.path.relpath(p,'pkg'))
+                      arc=os.path.relpath(p,'pkg')
+                      z.write(p, arc)
+                      print('add', arc, os.path.getsize(p))
           "
           ls -la dfzygisk.zip
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dfzygisk
-          path: dfzygisk.zip
-
-      - name: Commit artifact to repo
+      - name: Publish to dist branch
         run: |
+          set -e
           mkdir -p dist
           cp dfzygisk.zip dist/
           cp build/libzygisk.so dist/
