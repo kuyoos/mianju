@@ -10,4 +10,4 @@ target_compile_options(zygisk PRIVATE -fno-exceptions -fno-rtti -fvisibility=hid
 
 target_link_libraries(zygisk PRIVATE log dl)
 
-set_target_properties(zygisk PROPERTIES PREFIX "" OUTPUT_NAME "zygisk")
+set_target_properties(zygisk PROPERTIES PREFIX "lib" OUTPUT_NAME "zygisk")
