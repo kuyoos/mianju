@@ -11,48 +11,61 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compile (log to file, never fail early)
+      - name: Compile
         run: |
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           NDK_VER=26.1.10909125
-          {
-            echo "SDK=$SDK"
-            if [ ! -d "$SDK/ndk/$NDK_VER" ]; then
-              yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VER" 2>&1 | tail -5
-            fi
-          } 2>&1 | tee build.log
-
+          if [ ! -d "$SDK/ndk/$NDK_VER" ]; then
+            yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VER" >/dev/null 2>&1
+          fi
           export ANDROID_NDK_HOME="$SDK/ndk/$NDK_VER"
-          echo "NDK=$ANDROID_NDK_HOME" | tee -a build.log
-          ls "$ANDROID_NDK_HOME" 2>&1 | tee -a build.log
 
-          echo "=== CONFIGURE ===" | tee -a build.log
+          echo "NDK dir contents:"
+          ls "$ANDROID_NDK_HOME" || { echo "::error::NDK not found at $ANDROID_NDK_HOME"; exit 1; }
+
+          echo "toolchain file:"
+          ls "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" || { echo "::error::toolchain missing"; exit 1; }
+
           cmake -B build \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-30 \
-            -DCMAKE_BUILD_TYPE=Release 2>&1 | tee -a build.log
-          echo "configure_rc=$?" | tee -a build.log
+            -DCMAKE_BUILD_TYPE=Release > cfg.log 2>&1 || true
+          echo "--- configure output ---"
+          cat cfg.log
+          if [ ! -f build/Makefile ] && [ ! -f build/build.ninja ]; then
+            echo "::error::cmake configure failed"
+            tail -30 cfg.log | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          fi
 
-          echo "=== BUILD ===" | tee -a build.log
-          cmake --build build -j4 2>&1 | tee -a build.log
-          echo "build_rc=$?" | tee -a build.log
+          cmake --build build -j4 > bld.log 2>&1 || true
+          echo "--- build output ---"
+          cat bld.log
+          if [ ! -f build/libzygisk.so ]; then
+            echo "::error::libzygisk.so not produced"
+            tail -30 bld.log | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          fi
+          ls -la build/libzygisk.so
 
-          echo "=== RESULT ===" | tee -a build.log
-          find . -name "*.so" 2>&1 | tee -a build.log
-          ls -la build 2>&1 | tee -a build.log
-        continue-on-error: true
+      - name: Package
+        run: |
+          mkdir -p pkg/lib64
+          cp magisk/module.prop magisk/post-fs-data.sh magisk/service.sh pkg/
+          cp build/libzygisk.so pkg/lib64/libzygisk.so
+          python3 -c "
+          import os, zipfile
+          with zipfile.ZipFile('dfzygisk.zip','w',zipfile.ZIP_DEFLATED) as z:
+              for root,d,files in os.walk('pkg'):
+                  for f in files:
+                      p=os.path.join(root,f)
+                      z.write(p, os.path.relpath(p,'pkg'))
+                      print('add', os.path.relpath(p,'pkg'))
+          "
+          ls -la dfzygisk.zip
 
-      - name: Upload log
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: build-log
-          path: build.log
-          if-no-files-found: error
-
-      - name: Upload so
-        uses: actions/upload-artifact@v4
-        with:
-          name: lib
-          path: build/libzygisk.so
-          if-no-files-found: warn
+          name: dfzygisk
+          path: dfzygisk.zip
