@@ -15,38 +15,43 @@ jobs:
 
       - name: Setup NDK
         run: |
-          set -e
           NDK_VER=26.1.10909125
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          ls "$ANDROID_HOME" || true
-          ls "$ANDROID_HOME/ndk" 2>/dev/null || echo "no ndk dir yet"
-          if [ ! -d "$ANDROID_HOME/ndk/$NDK_VER" ]; then
-            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VER"
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          echo "SDK=$SDK" | tee setup.log
+          ls "$SDK" 2>&1 | tee -a setup.log
+          if [ ! -d "$SDK/ndk/$NDK_VER" ]; then
+            yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VER" 2>&1 | tail -20 | tee -a setup.log
           fi
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VER" >> $GITHUB_ENV
-          ls "$ANDROID_HOME/ndk/$NDK_VER" | head
+          echo "ANDROID_NDK_HOME=$SDK/ndk/$NDK_VER" >> $GITHUB_ENV
+          ls "$SDK/ndk/$NDK_VER" 2>&1 | tee -a setup.log
+        continue-on-error: false
 
       - name: Configure
         run: |
+          set -x
           cmake -B build \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-30 \
             -DCMAKE_BUILD_TYPE=Release \
-            -DANDROID_STL=c++_static
+            -DANDROID_STL=c++_static 2>&1 | tail -40
 
       - name: Build
-        run: cmake --build build -j$(nproc) --verbose
+        run: |
+          set -x
+          cmake --build build -j$(nproc) 2>&1 | tail -80
+          echo "=== result ==="
+          find build -name "*.so" -ls
 
       - name: Verify
         run: |
-          ls -la build/
+          ls -la build/ || true
           file build/libzygisk.so || true
-          $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -h build/libzygisk.so | head -20
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h build/libzygisk.so | head -20 || true
 
       - name: Package
         run: |
+          set -euxo pipefail
           mkdir -p pkg/lib64
           cp magisk/module.prop pkg/
           cp magisk/post-fs-data.sh pkg/
@@ -54,7 +59,9 @@ jobs:
           cp build/libzygisk.so pkg/lib64/libzygisk.so
           chmod 755 pkg/post-fs-data.sh pkg/service.sh
           chmod 644 pkg/module.prop pkg/lib64/libzygisk.so
-          python3 - <<'PY'
+          echo "--- pkg tree ---"
+          find pkg -type f -ls
+          python3 -c "
           import os, zipfile
           with zipfile.ZipFile('dfzygisk.zip', 'w', zipfile.ZIP_DEFLATED) as z:
               for root, dirs, files in os.walk('pkg'):
@@ -63,12 +70,20 @@ jobs:
                       arc = os.path.relpath(p, 'pkg')
                       z.write(p, arc)
                       print('add', arc)
-          PY
+          "
           ls -la dfzygisk.zip
-          python3 -c "import zipfile; [print(i.filename, i.file_size) for i in zipfile.ZipFile('dfzygisk.zip').infolist()]"
+          python3 -c "
+          import zipfile
+          for i in zipfile.ZipFile('dfzygisk.zip').infolist():
+              print(i.filename, i.file_size)
+          "
 
       - name: Upload
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dfzygisk-module
-          path: dfzygisk.zip
+          path: |
+            dfzygisk.zip
+            build/libzygisk.so
+          if-no-files-found: warn
