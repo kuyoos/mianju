@@ -15,13 +15,17 @@ jobs:
 
       - name: Setup NDK
         run: |
-          # GitHub runner 自带 Android SDK，装 NDK
+          set -e
           NDK_VER=26.1.10909125
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          ls "$ANDROID_HOME" || true
+          ls "$ANDROID_HOME/ndk" 2>/dev/null || echo "no ndk dir yet"
           if [ ! -d "$ANDROID_HOME/ndk/$NDK_VER" ]; then
-            yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;$NDK_VER" > /dev/null
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VER"
           fi
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VER" >> $GITHUB_ENV
-          ls "$ANDROID_HOME/ndk/$NDK_VER" | head -5
+          ls "$ANDROID_HOME/ndk/$NDK_VER" | head
 
       - name: Configure
         run: |
@@ -50,9 +54,18 @@ jobs:
           cp build/libzygisk.so pkg/lib64/libzygisk.so
           chmod 755 pkg/post-fs-data.sh pkg/service.sh
           chmod 644 pkg/module.prop pkg/lib64/libzygisk.so
-          cd pkg && zip -r ../dfzygisk.zip . && cd ..
+          python3 - <<'PY'
+          import os, zipfile
+          with zipfile.ZipFile('dfzygisk.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+              for root, dirs, files in os.walk('pkg'):
+                  for f in files:
+                      p = os.path.join(root, f)
+                      arc = os.path.relpath(p, 'pkg')
+                      z.write(p, arc)
+                      print('add', arc)
+          PY
           ls -la dfzygisk.zip
-          unzip -l dfzygisk.zip
+          python3 -c "import zipfile; [print(i.filename, i.file_size) for i in zipfile.ZipFile('dfzygisk.zip').infolist()]"
 
       - name: Upload
         uses: actions/upload-artifact@v4
