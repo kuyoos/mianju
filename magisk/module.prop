@@ -1,0 +1,6 @@
+id=dfzygisk
+name=DF Lua Hook (Zygisk)
+version=v1.0
+versionCode=1
+author=rea
+description=Early frida-gadget injection for com.garena.game.df (capture Lua bytecode)
