@@ -3,6 +3,9 @@
 // 时机：postAppSpecialize —— 进程已 fork、应用代码尚未执行
 // 动作：dlopen frida-gadget，让它在本进程内启动 frida server
 // 效果：外部可在 libUE4.so 加载前连上并 hook
+//
+// 注意：SELinux 阻止 app 进程读 /data/adb/modules，
+//       所以 gadget 从 /data/local/tmp/dflua/ 读取（post-fs-data.sh 负责复制并设上下文）
 
 #include <cstring>
 #include <cstdio>
@@ -21,31 +24,41 @@
 namespace {
 
 constexpr const char* kTargetPkg = "com.garena.game.df";
-constexpr const char* kGadget64 = "/data/adb/modules/dfzygisk/lib64/libgadget.so";
-constexpr const char* kGadget32 = "/data/adb/modules/dfzygisk/lib/libgadget.so";
+
+// 应用可访问的路径（post-fs-data.sh 从这里准备）
+constexpr const char* kGadget64 = "/data/local/tmp/dflua/libgadget.so";
+constexpr const char* kGadget32 = "/data/local/tmp/dflua/libgadget32.so";
+
+// 备用：模块目录（部分 ROM 允许）
+constexpr const char* kGadgetAlt = "/data/adb/modules/dfzygisk/lib64/libgadget.so";
 
 bool g_isTarget = false;
 bool g_loaded = false;
 
-bool loadGadget() {
-    if (g_loaded) return true;
-    const char* path = (sizeof(void*) == 8) ? kGadget64 : kGadget32;
-
+bool tryLoad(const char* path) {
     struct stat st {};
     if (stat(path, &st) != 0) {
-        LOGE("gadget missing: %s (%s)", path, strerror(errno));
+        LOGE("stat %s: %s", path, strerror(errno));
         return false;
     }
     LOGI("loading %s (%ld bytes)", path, (long) st.st_size);
-
     void* h = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
     if (h == nullptr) {
-        LOGE("dlopen failed: %s", dlerror());
+        LOGE("dlopen %s failed: %s", path, dlerror());
         return false;
     }
-    LOGI("gadget loaded at %p", h);
+    LOGI(">>> gadget OK at %p", h);
     g_loaded = true;
     return true;
+}
+
+bool loadGadget() {
+    if (g_loaded) return true;
+    const char* primary = (sizeof(void*) == 8) ? kGadget64 : kGadget32;
+    if (tryLoad(primary)) return true;
+    if (tryLoad(kGadgetAlt)) return true;
+    LOGE(">>> all gadget paths failed");
+    return false;
 }
 
 }  // namespace
@@ -58,15 +71,11 @@ public:
     }
 
     void preAppSpecialize(zygisk::AppSpecializeArgs* args) override {
-        if (env_ == nullptr || args == nullptr || args->nice_name == nullptr) {
-            return;
-        }
+        if (env_ == nullptr || args == nullptr || args->nice_name == nullptr) return;
         const char* name = env_->GetStringUTFChars(args->nice_name, nullptr);
         if (name != nullptr) {
             g_isTarget = (strcmp(name, kTargetPkg) == 0);
-            if (g_isTarget) {
-                LOGI(">>> target: %s", name);
-            }
+            if (g_isTarget) LOGI(">>> target: %s", name);
             env_->ReleaseStringUTFChars(args->nice_name, name);
         }
     }
@@ -74,11 +83,7 @@ public:
     void postAppSpecialize(const zygisk::AppSpecializeArgs* args) override {
         if (!g_isTarget) return;
         LOGI(">>> postAppSpecialize, injecting gadget");
-        if (loadGadget()) {
-            LOGI(">>> gadget injection OK");
-        } else {
-            LOGE(">>> gadget injection FAILED");
-        }
+        loadGadget();
     }
 
 private:

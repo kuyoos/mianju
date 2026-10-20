@@ -46,15 +46,26 @@ jobs:
       - name: Package
         run: |
           set -e
-          mkdir -p pkg/lib64 pkg/lib
+          mkdir -p pkg/lib64 pkg/zygisk
           cp magisk/module.prop magisk/post-fs-data.sh magisk/service.sh pkg/
           cp build/libzygisk.so pkg/lib64/libzygisk.so
+          cp build/libzygisk.so pkg/zygisk/arm64-v8a.so
           if [ -f prebuilt/libgadget.so ]; then
             cp prebuilt/libgadget.so pkg/lib64/libgadget.so
             echo "gadget included: $(stat -c %s pkg/lib64/libgadget.so) bytes"
           else
             echo "::warning::prebuilt/libgadget.so missing"
           fi
+          cat > pkg/lib64/libgadget.config.so <<'JSON'
+          {
+            "interaction": {
+              "type": "listen",
+              "address": "127.0.0.1",
+              "port": 27043,
+              "on_load": "wait"
+            }
+          }
+          JSON
           python3 -c "
           import os, zipfile
           with zipfile.ZipFile('dfzygisk.zip','w',zipfile.ZIP_DEFLATED) as z:
