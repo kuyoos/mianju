@@ -44,10 +44,15 @@ jobs:
       - name: Package
         run: |
           mkdir -p pkg/lib64
-          cp -r magisk/* pkg/
+          cp magisk/module.prop pkg/
+          cp magisk/post-fs-data.sh pkg/
+          cp magisk/service.sh pkg/
           cp build/libzygisk.so pkg/lib64/libzygisk.so
           chmod 755 pkg/post-fs-data.sh pkg/service.sh
-          cd pkg && zip -r ../dfzygisk.zip .
+          chmod 644 pkg/module.prop pkg/lib64/libzygisk.so
+          cd pkg && zip -r ../dfzygisk.zip . && cd ..
+          ls -la dfzygisk.zip
+          unzip -l dfzygisk.zip
 
       - name: Upload
         uses: actions/upload-artifact@v4
