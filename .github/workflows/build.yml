@@ -14,6 +14,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Fetch frida-gadget
+        run: |
+          mkdir -p prebuilt
+          curl -L --retry 3 -o /tmp/fg.xz "https://github.com/frida/frida/releases/download/16.7.19/frida-gadget-16.7.19-android-arm64.so.xz"
+          xz -dc /tmp/fg.xz > prebuilt/libgadget.so
+          ls -la prebuilt/libgadget.so
+          file prebuilt/libgadget.so || true
+
       - name: Compile
         run: |
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
