@@ -1,37 +1,49 @@
 #!/system/bin/sh
 # Magisk post-fs-data
-# 目标：把 gadget 复制到 app 进程可读的位置（绕开 SELinux 对 /data/adb 的限制）
+# 目标：把 gadget 放到 app 进程可读、可 mmap 的位置
+#
+# SELinux 现实：
+#   /data/adb/modules/*     → app 进程完全无权
+#   /data/local/tmp/*       → app 能 stat 但不能 mmap（execute 被拒）
+#   /data/data/<pkg>/*      → app 自己的目录，完全可用  ✔
 
 MODDIR=${0%/*}
-DEST=/data/local/tmp/dflua
+PKG=com.garena.game.df
+DATA=/data/data/$PKG
 
-mkdir -p "$DEST"
-chmod 755 "$DEST"
+log -t DFZygisk "post-fs-data start"
 
-# 复制 gadget（64 位）
+mkdir -p /data/local/tmp/dflua
+
+# 1) 复制到 app 私有目录（首选）
+if [ -d "$DATA" ]; then
+    mkdir -p "$DATA/files"
+    if [ -f "$MODDIR/lib64/libgadget.so" ]; then
+        cp -f "$MODDIR/lib64/libgadget.so" "$DATA/files/libgadget.so"
+        chmod 755 "$DATA/files/libgadget.so"
+        # 归属该 app（从 packages.list 取 uid）
+        APP_UID=$(stat -c %u "$DATA" 2>/dev/null)
+        if [ -n "$APP_UID" ]; then
+            chown "$APP_UID:$APP_UID" "$DATA/files/libgadget.so" 2>/dev/null
+        fi
+        chcon u:object_r:app_data_file:s0 "$DATA/files/libgadget.so" 2>/dev/null
+        log -t DFZygisk "installed gadget -> $DATA/files/libgadget.so (uid=$APP_UID)"
+    fi
+    if [ -f "$MODDIR/lib64/libgadget.config.so" ]; then
+        cp -f "$MODDIR/lib64/libgadget.config.so" "$DATA/files/libgadget.config.so"
+        chmod 755 "$DATA/files/libgadget.config.so"
+        chcon u:object_r:app_data_file:s0 "$DATA/files/libgadget.config.so" 2>/dev/null
+        log -t DFZygisk "installed config"
+    fi
+else
+    log -t DFZygisk "WARN: $DATA not found (app not installed yet)"
+fi
+
+# 2) 同时放一份到 /data/local/tmp 作为备份
 if [ -f "$MODDIR/lib64/libgadget.so" ]; then
-    cp -f "$MODDIR/lib64/libgadget.so" "$DEST/libgadget.so"
-    chmod 755 "$DEST/libgadget.so"
-    chown shell:shell "$DEST/libgadget.so" 2>/dev/null
-    # 设置 SELinux 上下文为 app 可读
-    chcon u:object_r:shell_data_file:s0 "$DEST/libgadget.so" 2>/dev/null || \
-    chcon u:object_r:app_data_file:s0 "$DEST/libgadget.so" 2>/dev/null || true
-    log -t DFZygisk "copied gadget to $DEST/libgadget.so"
+    cp -f "$MODDIR/lib64/libgadget.so" /data/local/tmp/dflua/libgadget.so
+    chmod 755 /data/local/tmp/dflua/libgadget.so
 fi
 
-# 复制配置
-if [ -f "$MODDIR/lib64/libgadget.config.so" ]; then
-    cp -f "$MODDIR/lib64/libgadget.config.so" "$DEST/libgadget.config.so"
-    chmod 755 "$DEST/libgadget.config.so"
-    chcon u:object_r:shell_data_file:s0 "$DEST/libgadget.config.so" 2>/dev/null || true
-    log -t DFZygisk "copied config"
-fi
-
-# 复制 zygisk 库到模块的 zygisk/ 目录（如未做）
-mkdir -p "$MODDIR/zygisk"
-if [ -f "$MODDIR/lib64/libzygisk.so" ] && [ ! -f "$MODDIR/zygisk/arm64-v8a.so" ]; then
-    cp -f "$MODDIR/lib64/libzygisk.so" "$MODDIR/zygisk/arm64-v8a.so"
-fi
-
-ls -la "$DEST" 2>/dev/null
+ls -la "$DATA/files/" 2>/dev/null | grep gadget
 log -t DFZygisk "post-fs-data done"

@@ -2,10 +2,9 @@
 //
 // 时机：postAppSpecialize —— 进程已 fork、应用代码尚未执行
 // 动作：dlopen frida-gadget，让它在本进程内启动 frida server
-// 效果：外部可在 libUE4.so 加载前连上并 hook
 //
-// 注意：SELinux 阻止 app 进程读 /data/adb/modules，
-//       所以 gadget 从 /data/local/tmp/dflua/ 读取（post-fs-data.sh 负责复制并设上下文）
+// SELinux 要点：app 进程只能读自己的 data 目录和少数公共目录，
+// 所以 gadget 由 post-fs-data.sh 复制到 /data/data/com.garena.game.df/ 下。
 
 #include <cstring>
 #include <cstdio>
@@ -25,39 +24,39 @@ namespace {
 
 constexpr const char* kTargetPkg = "com.garena.game.df";
 
-// 应用可访问的路径（post-fs-data.sh 从这里准备）
-constexpr const char* kGadget64 = "/data/local/tmp/dflua/libgadget.so";
-constexpr const char* kGadget32 = "/data/local/tmp/dflua/libgadget32.so";
-
-// 备用：模块目录（部分 ROM 允许）
-constexpr const char* kGadgetAlt = "/data/adb/modules/dfzygisk/lib64/libgadget.so";
+// app 私有目录优先（app 有完整权限），/data/local/tmp 作为备用
+constexpr const char* kPaths[] = {
+    "/data/data/com.garena.game.df/files/libgadget.so",
+    "/data/data/com.garena.game.df/libgadget.so",
+    "/data/user/0/com.garena.game.df/files/libgadget.so",
+    "/data/local/tmp/dflua/libgadget.so",
+};
 
 bool g_isTarget = false;
 bool g_loaded = false;
 
-bool tryLoad(const char* path) {
-    struct stat st {};
-    if (stat(path, &st) != 0) {
-        LOGE("stat %s: %s", path, strerror(errno));
-        return false;
-    }
-    LOGI("loading %s (%ld bytes)", path, (long) st.st_size);
-    void* h = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
-    if (h == nullptr) {
-        LOGE("dlopen %s failed: %s", path, dlerror());
-        return false;
-    }
-    LOGI(">>> gadget OK at %p", h);
-    g_loaded = true;
-    return true;
-}
-
 bool loadGadget() {
     if (g_loaded) return true;
-    const char* primary = (sizeof(void*) == 8) ? kGadget64 : kGadget32;
-    if (tryLoad(primary)) return true;
-    if (tryLoad(kGadgetAlt)) return true;
-    LOGE(">>> all gadget paths failed");
+    for (const char* path : kPaths) {
+        struct stat st {};
+        if (stat(path, &st) != 0) continue;
+        LOGI("found gadget: %s (%ld bytes)", path, (long) st.st_size);
+
+        // 读权限检查
+        if (access(path, R_OK) != 0) {
+            LOGE("no read access: %s (%s)", path, strerror(errno));
+            continue;
+        }
+        void* h = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+        if (h == nullptr) {
+            LOGE("dlopen %s failed: %s", path, dlerror());
+            continue;
+        }
+        LOGI(">>> GADGET LOADED at %p from %s", h, path);
+        g_loaded = true;
+        return true;
+    }
+    LOGE(">>> no gadget could be loaded");
     return false;
 }
 

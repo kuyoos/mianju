@@ -1,0 +1,9 @@
+# 允许 app 进程读取并映射 /data/local/tmp 下的 gadget
+allow untrusted_app shell_data_file file { read open getattr map execute execute_no_trans };
+allow untrusted_app shell_data_file:file { read open getattr map execute execute_no_trans };
+allow untrusted_app app_data_file:file { read open getattr map execute execute_no_trans };
+allow untrusted_app system_file:file { read open getattr map execute execute_no_trans };
+
+# 允许 dlopen 从 tmp 加载
+allow untrusted_app tmpfs file { read open getattr map execute execute_no_trans };
+allow untrusted_app shell_data_file:lnk_file read;
